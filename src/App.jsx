@@ -24,33 +24,75 @@ const KeibaAnalysisApp = () => {
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
 
+  // 画像をリサイズしてメモリ使用量を抑える（iOS Safariのタブクラッシュ対策）
+  const resizeImage = (file, maxDim = 1200) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          let { width, height } = img;
+          const longEdge = Math.max(width, height);
+          if (longEdge > maxDim) {
+            const scale = maxDim / longEdge;
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          // JPEGに圧縮してDataURLで返す（Tesseractはこの形式も受け付ける）
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+  // Tesseract.jsを1回だけロードしてキャッシュ
+  const loadTesseract = () =>
+    new Promise((resolve, reject) => {
+      if (typeof window !== 'undefined' && window.Tesseract) {
+        resolve(window.Tesseract);
+        return;
+      }
+      const existing = document.getElementById('tesseract-script');
+      if (existing) {
+        existing.addEventListener('load', () => resolve(window.Tesseract));
+        existing.addEventListener('error', () => reject(new Error('Tesseract load error')));
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'tesseract-script';
+      script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.4/dist/tesseract.min.js';
+      script.onload = () => resolve(window.Tesseract);
+      script.onerror = () => reject(new Error('Tesseract load error'));
+      document.body.appendChild(script);
+    });
+
   const extractTextFromImage = async (imageFile) => {
     setOcrLoading(true);
     try {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/2.1.5/tesseract.min.js';
-      document.body.appendChild(script);
-      return new Promise((resolve) => {
-        script.onload = async () => {
-          const reader = new FileReader();
-          reader.onload = async (e) => {
-            try {
-              const result = await Tesseract.recognize(e.target.result, 'jpn+eng', {
-                logger: (m) => console.log('OCR Progress:', Math.round(m.progress * 100) + '%'),
-              });
-              resolve(result.data.text);
-            } catch (error) {
-              console.error('OCR Error:', error);
-              resolve('');
-            }
-          };
-          reader.readAsDataURL(imageFile);
-        };
+      const resizedDataUrl = await resizeImage(imageFile, 1200);
+      const Tesseract = await loadTesseract();
+      const result = await Tesseract.recognize(resizedDataUrl, 'jpn+eng', {
+        logger: (m) => {
+          if (m.status === 'recognizing text') {
+            console.log('OCR Progress:', Math.round(m.progress * 100) + '%');
+          }
+        },
       });
+      return result.data.text;
     } catch (error) {
-      console.error('Script loading error:', error);
-      setOcrLoading(false);
+      console.error('OCR Error:', error);
+      alert('画像の読み取りに失敗しました。別の画像で再度お試しください。\n（' + (error?.message || '不明なエラー') + '）');
       return '';
+    } finally {
+      setOcrLoading(false);
     }
   };
 
