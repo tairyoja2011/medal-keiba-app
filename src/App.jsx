@@ -279,7 +279,6 @@ const KeibaAnalysisApp = () => {
             ref={fileInputRef}
             type="file"
             accept="image/*"
-            capture={isMobile ? 'environment' : undefined}
             onChange={(e) => handleImageUpload(e, 'lineup')}
             className="hidden"
           />
@@ -415,7 +414,6 @@ const KeibaAnalysisApp = () => {
               ref={cameraInputRef}
               type="file"
               accept="image/*"
-              capture="environment"
               onChange={(e) => handleImageUpload(e, 'results')}
               className="hidden"
             />
