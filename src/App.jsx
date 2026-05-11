@@ -1,5 +1,7 @@
-import React, { useState, useRef } from 'react';
-import { Upload, Download, Settings, BarChart3, TrendingUp, AlertCircle, CheckCircle2, Edit2, Save, X, Camera, Loader, Plus, Trash2, Star } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, Download, Settings, BarChart3, TrendingUp, AlertCircle, CheckCircle2, Edit2, Save, X, Camera, Loader, Plus, Trash2, Star, LogOut } from 'lucide-react';
+import { authenticateGoogle, createGoogleSheet, saveToGoogleSheets } from './utils/googleSheets';
+import { calculatePlacementProbability, calculateScoreTrend, getTopHorsesByWinRate } from './utils/dataAnalysis';
 
 const KeibaAnalysisApp = () => {
   const [races, setRaces] = useState([]);
@@ -20,9 +22,21 @@ const KeibaAnalysisApp = () => {
 
   const [budget, setBudget] = useState(10000);
   const [showSettings, setShowSettings] = useState(false);
+  const [googleAuth, setGoogleAuth] = useState(null);
+  const [spreadsheetId, setSpreadsheetId] = useState(localStorage.getItem('spreadsheetId') || null);
+  const [horseStats, setHorseStats] = useState({});
+  const [scoreTrends, setScoreTrends] = useState({});
 
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+
+  // 初期化：Google 認証の確認
+  useEffect(() => {
+    const savedSpreadsheetId = localStorage.getItem('spreadsheetId');
+    if (savedSpreadsheetId) {
+      setSpreadsheetId(savedSpreadsheetId);
+    }
+  }, []);
 
   // 画像をリサイズしてメモリ使用量を抑える（iOS Safariのタブクラッシュ対策）
   const resizeImage = (file, maxDim = 1200) =>
@@ -119,13 +133,16 @@ const KeibaAnalysisApp = () => {
     lines.forEach((line, idx) => {
       const match = line.match(/(\d+)\s+(.+?)\s+(◎|○|▲|△|×)?(.+)?/);
       if (match) {
+        const horseNumber = parseInt(match[1]);
+        // 馬番と枠の整合性を確保：馬番 % 8 = 枠（1-8の範囲内）
+        const frame = horseNumber % 8 === 0 ? 8 : horseNumber % 8;
         horses.push({
           id: idx,
           number: match[1],
           name: match[2].trim(),
           mark: match[3] || '△',
           condition: match[4] ? parseCondition(match[4]) : 'normal',
-          frame: Math.floor(Math.random() * 8) + 1,
+          frame: frame,
           jockey: 'Unknown',
           predictedScore: 0,
         });
@@ -238,7 +255,7 @@ const KeibaAnalysisApp = () => {
     setResultInputMethod('image');
   };
 
-  const handleSaveRace = () => {
+  const handleSaveRace = async () => {
     if (editingRace) {
       setRaces(races.map((r) => (r.id === editingRace.id ? editingRace : r)));
       setEditingRace(null);
@@ -246,6 +263,27 @@ const KeibaAnalysisApp = () => {
       setRaces([...races, pendingRace]);
       setPendingRace(null);
     }
+
+    // 馬統計を再計算
+    if (races.length > 0) {
+      const updatedRaces = editingRace
+        ? races.map((r) => (r.id === editingRace.id ? editingRace : r))
+        : [...races, pendingRace];
+      const stats = calculatePlacementProbability(updatedRaces);
+      const trends = calculateScoreTrend(updatedRaces);
+      setHorseStats(stats);
+      setScoreTrends(trends);
+
+      // Google Sheets に保存（設定されている場合）
+      if (spreadsheetId) {
+        try {
+          await saveToGoogleSheets(spreadsheetId, updatedRaces);
+        } catch (error) {
+          console.error('Failed to save to Google Sheets:', error);
+        }
+      }
+    }
+
     setCurrentStep('analyze');
   };
 
@@ -466,19 +504,23 @@ const KeibaAnalysisApp = () => {
         {(editingRace || pendingRace) && (
           <div className="bg-slate-700/30 rounded-xl border border-slate-600 p-4 backdrop-blur">
             <h2 className="font-semibold mb-3">データ確認・編集</h2>
+
+            {/* 出馬表編集 */}
             {(editingRace || pendingRace)?.horses && (
               <div>
                 <p className="text-sm font-semibold mb-1 text-cyan-400">出馬表（OCR認識結果を編集）</p>
                 <p className="text-xs text-gray-400 mb-3">
-                  ⚠ 馬番が「0」または空、馬名が認識できなかった行は<span className="text-red-400">赤枠</span>で表示されます。実際の値に修正してください。
+                  ⚠ 馬番と枠の整合性を確認してください。馬番が正しく認識されない場合は修正してください。
                 </p>
                 <div className="overflow-x-auto mb-4">
-                  <table className="w-full text-sm border-collapse">
+                  <table className="w-full text-xs border-collapse">
                     <thead>
                       <tr className="border-b border-slate-600 text-cyan-400">
-                        <th className="text-left py-2 px-2 font-semibold w-12">No.</th>
-                        <th className="text-left py-2 px-2 font-semibold w-24">馬番</th>
+                        <th className="text-left py-2 px-2 font-semibold">No.</th>
+                        <th className="text-left py-2 px-2 font-semibold">馬番</th>
                         <th className="text-left py-2 px-2 font-semibold">馬名</th>
+                        <th className="text-left py-2 px-2 font-semibold">枠</th>
+                        <th className="text-left py-2 px-2 font-semibold">整合性</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -486,16 +528,23 @@ const KeibaAnalysisApp = () => {
                         const numStr = String(horse.number || '');
                         const numInvalid = !numStr || numStr === '0';
                         const nameInvalid = !horse.name || horse.name.trim().length <= 1;
+                        const expectedFrame = (parseInt(numStr) % 8 === 0 ? 8 : parseInt(numStr) % 8) || horse.frame;
+                        const frameMatch = parseInt(numStr) > 0 && horse.frame === expectedFrame;
                         return (
                           <tr key={horse.id} className="border-b border-slate-700/60">
-                            <td className="py-1 px-2 text-gray-400">{idx + 1}</td>
+                            <td className="py-1 px-2 text-gray-400 text-xs">{idx + 1}</td>
                             <td className="py-1 px-2">
                               <input
                                 type="text"
                                 value={numStr === '0' ? '' : numStr}
                                 onChange={(e) => {
                                   const updated = editingRace || pendingRace;
-                                  updated.horses[idx].number = e.target.value;
+                                  const newNum = e.target.value;
+                                  updated.horses[idx].number = newNum;
+                                  // 自動で枠を計算
+                                  if (newNum) {
+                                    updated.horses[idx].frame = parseInt(newNum) % 8 === 0 ? 8 : parseInt(newNum) % 8;
+                                  }
                                   editingRace ? setEditingRace({ ...updated }) : setPendingRace({ ...updated });
                                 }}
                                 placeholder="（要入力）"
@@ -511,9 +560,17 @@ const KeibaAnalysisApp = () => {
                                   updated.horses[idx].name = e.target.value;
                                   editingRace ? setEditingRace({ ...updated }) : setPendingRace({ ...updated });
                                 }}
-                                placeholder="（馬名を入力）"
+                                placeholder="（馬名）"
                                 className={`w-full px-2 py-1 bg-slate-900 border rounded text-gray-100 text-xs ${nameInvalid ? 'border-red-500' : 'border-slate-500'}`}
                               />
+                            </td>
+                            <td className="py-1 px-2 text-gray-300">{horse.frame}</td>
+                            <td className="py-1 px-2">
+                              {frameMatch ? (
+                                <span className="text-xs text-green-400 font-semibold">✓</span>
+                              ) : (
+                                <span className="text-xs text-red-400 font-semibold">✗ {expectedFrame}</span>
+                              )}
                             </td>
                           </tr>
                         );
@@ -523,6 +580,46 @@ const KeibaAnalysisApp = () => {
                 </div>
               </div>
             )}
+
+            {/* 傾向分析表示 */}
+            {races.length > 0 && (
+              <div className="mb-4 p-3 bg-purple-900/30 rounded-lg border border-purple-600">
+                <p className="text-sm font-semibold mb-2 text-purple-300">📊 馬番ごとの着順確率（過去データ）</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-purple-600 text-purple-300">
+                        <th className="text-left py-1 px-2">馬番</th>
+                        <th className="text-center py-1 px-2">1着</th>
+                        <th className="text-center py-1 px-2">2着</th>
+                        <th className="text-center py-1 px-2">3着</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getTopHorsesByWinRate(horseStats, 8).map((horse) => (
+                        <tr key={horse.number} className="border-b border-slate-700/40">
+                          <td className="py-1 px-2 font-semibold text-purple-300">
+                            {horse.number}番 ({horse.name})
+                          </td>
+                          <td className="text-center py-1 px-2 text-green-300">{horse.firstRate}%</td>
+                          <td className="text-center py-1 px-2 text-blue-300">{horse.secondRate}%</td>
+                          <td className="text-center py-1 px-2 text-yellow-300">{horse.thirdRate}%</td>
+                        </tr>
+                      ))}
+                      {Object.keys(horseStats).length === 0 && (
+                        <tr>
+                          <td colSpan="4" className="text-center py-2 text-gray-400 text-xs">
+                            過去データなし
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 結果表示 */}
             {(editingRace || pendingRace)?.results && (editingRace || pendingRace).results.length > 0 && (
               <div>
                 <p className="text-sm font-semibold mb-2 text-green-400">入力済み結果</p>
@@ -535,6 +632,8 @@ const KeibaAnalysisApp = () => {
                 </div>
               </div>
             )}
+
+            {/* ボタン */}
             <div className="flex gap-2">
               <button
                 onClick={handleSaveRace}
@@ -648,9 +747,10 @@ const KeibaAnalysisApp = () => {
       {/* 設定モーダル */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-slate-800 rounded-xl border border-slate-600 p-6 max-w-sm w-full">
+          <div className="bg-slate-800 rounded-xl border border-slate-600 p-6 max-w-sm w-full max-h-96 overflow-y-auto">
             <h2 className="text-xl font-bold mb-4">設定</h2>
             <div className="space-y-4">
+              {/* 予算設定 */}
               <div>
                 <label className="block text-sm font-semibold mb-2">
                   予算: ¥{budget.toLocaleString()}
@@ -665,6 +765,70 @@ const KeibaAnalysisApp = () => {
                   className="w-full"
                 />
               </div>
+
+              {/* Google Workspace 連携 */}
+              <div className="pt-4 border-t border-slate-600">
+                <h3 className="text-sm font-semibold mb-3 text-cyan-400">
+                  Google Workspace 連携
+                </h3>
+                {!spreadsheetId ? (
+                  <button
+                    onClick={async () => {
+                      try {
+                        setOcrLoading(true);
+                        await authenticateGoogle();
+                        const newSpreadsheetId = await createGoogleSheet();
+                        setSpreadsheetId(newSpreadsheetId);
+                        localStorage.setItem('spreadsheetId', newSpreadsheetId);
+                        alert(
+                          `Google Sheet を作成しました！\nSheet ID: ${newSpreadsheetId}`
+                        );
+                      } catch (error) {
+                        alert(
+                          'Google 認証に失敗しました。\n設定で API キーを確認してください。'
+                        );
+                        console.error(error);
+                      } finally {
+                        setOcrLoading(false);
+                      }
+                    }}
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold text-sm flex items-center justify-center gap-2"
+                    disabled={ocrLoading}
+                  >
+                    {ocrLoading ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        接続中...
+                      </>
+                    ) : (
+                      <>
+                        🔗 Google Sheet を作成
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-green-400 font-semibold">
+                      ✓ Google Sheet に接続しています
+                    </p>
+                    <p className="text-xs text-gray-400 break-all">
+                      ID: {spreadsheetId.substring(0, 20)}...
+                    </p>
+                    <button
+                      onClick={() => {
+                        setSpreadsheetId(null);
+                        localStorage.removeItem('spreadsheetId');
+                        alert('Google Sheet の連携を解除しました。');
+                      }}
+                      className="w-full py-1 bg-red-600/30 hover:bg-red-600/40 rounded text-sm flex items-center justify-center gap-1"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      解除
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button
                 onClick={() => setShowSettings(false)}
                 className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-semibold"
