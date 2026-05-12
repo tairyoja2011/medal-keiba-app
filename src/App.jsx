@@ -187,8 +187,16 @@ const KeibaAnalysisApp = () => {
 
   const getCurrentRaceRecommendations = (horses) => {
     if (!horses || horses.length === 0) return [];
+    // 重複を除去（同じ馬番が複数回出現する場合、最初の1つだけを保持）
+    const seen = new Set();
     return horses
       .filter(isValidHorse)
+      .filter(h => {
+        const num = String(h.number).trim();
+        if (seen.has(num)) return false;
+        seen.add(num);
+        return true;
+      })
       .map((h) => ({ ...h, ev: calculateExpectedValue(h) }))
       .sort((a, b) => b.ev - a.ev)
       .slice(0, 3);
@@ -563,9 +571,9 @@ const KeibaAnalysisApp = () => {
                             </td>
                             <td className="py-1 px-2">
                               {frameMatch ? (
-                                <span className="text-xs text-green-400 font-semibold">✓ 正常</span>
+                                <span className="text-xs text-green-400 font-semibold">✓ OK</span>
                               ) : (
-                                <span className="text-xs text-red-400 font-semibold">✗ 枠{expectedFrame}に修正</span>
+                                <span className="text-xs text-red-400 font-semibold">✗ 要確認</span>
                               )}
                             </td>
                           </tr>
