@@ -347,7 +347,7 @@ const KeibaAnalysisApp = () => {
         <div className="bg-slate-700/30 rounded-xl border border-slate-600 p-4 backdrop-blur">
           <h2 className="font-semibold mb-3 flex items-center gap-2">
             <Upload className="w-4 h-4 text-cyan-400" />
-            出馬表データ入力
+            １．出馬表データ入力
           </h2>
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -386,7 +386,6 @@ const KeibaAnalysisApp = () => {
                     <th className="text-left py-2 px-2 font-semibold">馬名</th>
                     <th className="text-left py-2 px-2 font-semibold">印</th>
                     <th className="text-left py-2 px-2 font-semibold">調子</th>
-                    <th className="text-left py-2 px-2 font-semibold">枠</th>
                     <th className="text-right py-2 px-2 font-semibold">スコア</th>
                   </tr>
                 </thead>
@@ -402,7 +401,6 @@ const KeibaAnalysisApp = () => {
                         </span>
                       </td>
                       <td className="py-2 px-2 text-cyan-300">{conditionLabel(horse.condition)}</td>
-                      <td className="py-2 px-2 text-cyan-300">{horse.frame}</td>
                       <td className="py-2 px-2 text-right font-mono text-cyan-300">{horse.ev.toFixed(2)}</td>
                     </tr>
                   ))}
@@ -421,7 +419,7 @@ const KeibaAnalysisApp = () => {
           <div className="bg-slate-700/30 rounded-xl border border-slate-600 p-4 backdrop-blur">
             <h2 className="font-semibold mb-3 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-400" />
-              結果入力
+              ２．結果入力
             </h2>
             <div className="flex gap-2 mb-4">
               <button
@@ -510,7 +508,7 @@ const KeibaAnalysisApp = () => {
               <div>
                 <p className="text-sm font-semibold mb-1 text-cyan-400">出馬表（OCR認識結果を編集）</p>
                 <p className="text-xs text-gray-400 mb-3">
-                  ⚠ 馬番と枠の整合性を確認してください。馬番が正しく認識されない場合は修正してください。
+                  ⚠ 馬番と枠の整合性：馬番1～8に対して枠は自動計算されます。整合性が✗の場合は馬番を修正してください。
                 </p>
                 <div className="overflow-x-auto mb-4">
                   <table className="w-full text-xs border-collapse">
@@ -519,7 +517,6 @@ const KeibaAnalysisApp = () => {
                         <th className="text-left py-2 px-2 font-semibold">No.</th>
                         <th className="text-left py-2 px-2 font-semibold">馬番</th>
                         <th className="text-left py-2 px-2 font-semibold">馬名</th>
-                        <th className="text-left py-2 px-2 font-semibold">枠</th>
                         <th className="text-left py-2 px-2 font-semibold">整合性</th>
                       </tr>
                     </thead>
@@ -564,12 +561,11 @@ const KeibaAnalysisApp = () => {
                                 className={`w-full px-2 py-1 bg-slate-900 border rounded text-gray-100 text-xs ${nameInvalid ? 'border-red-500' : 'border-slate-500'}`}
                               />
                             </td>
-                            <td className="py-1 px-2 text-gray-300">{horse.frame}</td>
                             <td className="py-1 px-2">
                               {frameMatch ? (
-                                <span className="text-xs text-green-400 font-semibold">✓</span>
+                                <span className="text-xs text-green-400 font-semibold">✓ 正常</span>
                               ) : (
-                                <span className="text-xs text-red-400 font-semibold">✗ {expectedFrame}</span>
+                                <span className="text-xs text-red-400 font-semibold">✗ 枠{expectedFrame}に修正</span>
                               )}
                             </td>
                           </tr>
