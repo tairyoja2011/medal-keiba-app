@@ -88,12 +88,47 @@ const KeibaAnalysisApp = () => {
       document.body.appendChild(script);
     });
 
+  // 画像を OCR 用に前処理（グレースケール + コントラスト調整）
+  const enhanceImageForOCR = (dataUrl) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+
+        // グレースケール化 + コントラスト調整
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        // グレースケール化とコントラスト調整
+        for (let i = 0; i < data.length; i += 4) {
+          const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+          // コントラスト調整（factor = 1.5 で強化）
+          const factor = 1.5;
+          const enhanced = 128 + (gray - 128) * factor;
+          data[i] = Math.min(255, Math.max(0, enhanced));
+          data[i + 1] = Math.min(255, Math.max(0, enhanced));
+          data[i + 2] = Math.min(255, Math.max(0, enhanced));
+          data[i + 3] = 255;
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL('image/jpeg', 0.95));
+      };
+      img.src = dataUrl;
+    });
+
   const extractTextFromImage = async (imageFile) => {
     setOcrLoading(true);
     try {
       const resizedDataUrl = await resizeImage(imageFile, 1200);
+      // 画像を OCR 用に前処理
+      const enhancedDataUrl = await enhanceImageForOCR(resizedDataUrl);
       const Tesseract = await loadTesseract();
-      const result = await Tesseract.recognize(resizedDataUrl, 'jpn+eng', {
+      const result = await Tesseract.recognize(enhancedDataUrl, 'jpn+eng', {
         logger: (m) => {
           if (m.status === 'recognizing text') {
             console.log('OCR Progress:', Math.round(m.progress * 100) + '%');
@@ -131,15 +166,33 @@ const KeibaAnalysisApp = () => {
   const parseLineupTable = (lines) => {
     const horses = [];
     lines.forEach((line, idx) => {
-      const match = line.match(/(\d+)\s+(.+?)\s+(◎|○|▲|△|×)?(.+)?/);
+      // 複数の正規表現パターンを試す（OCR 誤認識対策）
+      let match = line.match(/^(\d+)\s+(.+?)\s+(◎|○|▲|△|×)?\s*(.*)$/);
+
       if (match) {
-        const horseNumber = parseInt(match[1]);
+        let horseNumber = parseInt(match[1]);
+
+        // 馬番の検証と修正
+        // 0 番はない、1-18 の範囲が正常
+        if (horseNumber === 0 || horseNumber > 18) {
+          // 不正な馬番は記録しない
+          return;
+        }
+
         // 馬番と枠の整合性を確保：馬番 % 8 = 枠（1-8の範囲内）
         const frame = horseNumber % 8 === 0 ? 8 : horseNumber % 8;
+
+        // 馬名の前処理（不要な記号を除去）
+        let horseName = match[2].trim()
+          .replace(/[^\p{L}\p{N}\p{M}\s\-]/gu, '') // Unicode で日本語と英数字以外を除去
+          .trim();
+
+        if (horseName.length === 0) horseName = '不明';
+
         horses.push({
           id: idx,
-          number: match[1],
-          name: match[2].trim(),
+          number: horseNumber.toString(),
+          name: horseName,
           mark: match[3] || '△',
           condition: match[4] ? parseCondition(match[4]) : 'normal',
           frame: frame,
@@ -154,20 +207,31 @@ const KeibaAnalysisApp = () => {
   const parseResultsTable = (lines) => {
     const results = [];
     lines.forEach((line, idx) => {
-      const match = line.match(/(\d+)着\s+(\d+)番/);
+      // 複数のパターンに対応（OCR 誤認識対策）
+      const match = line.match(/(\d+)\s*着\s+(\d+)\s*番/) || line.match(/(\d)\s*着\s*:?\s*(\d+)/);
       if (match) {
-        results.push({
-          placement: parseInt(match[1]),
-          number: match[2],
-        });
+        const placement = parseInt(match[1]);
+        const number = match[2];
+        // 着順は 1-3 のみ、馬番は 1-18 の範囲チェック
+        if (placement >= 1 && placement <= 3 && parseInt(number) >= 1 && parseInt(number) <= 18) {
+          results.push({
+            placement: placement,
+            number: number,
+          });
+        }
       }
     });
     return results;
   };
 
   const parseCondition = (text) => {
-    if (text.includes('↑')) return 'up';
-    if (text.includes('↓')) return 'down';
+    if (!text) return 'normal';
+    const t = String(text).toLowerCase();
+    // 矢印や単語パターンで判定（OCR 誤認識対策）
+    if (t.includes('↑') || t.includes('up') || t.includes('↗')) return 'up';
+    if (t.includes('↓') || t.includes('down') || t.includes('↘')) return 'down';
+    if (t.includes('△') || t.includes('→') || t.includes('normal')) return 'normal';
+    // デフォルト
     return 'normal';
   };
 
